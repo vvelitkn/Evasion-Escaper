@@ -1,0 +1,5 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\target.exe]
+"VerifierDlls"="agent.dll"
+"GlobalFlag"=dword:00000100
