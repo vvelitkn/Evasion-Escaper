@@ -4,6 +4,8 @@
 
 The primary objective of this project is to evade the various checks that malicious software employs to identify if it's running in a virtual environment or sandbox, and to pass all such checks with success. To accomplish this, a novel approach has been adopted that leverages a DLL to effortlessly track the DLLs loaded on the system, access their addresses, and modify them as required. As a reference and test case, "Al-Khaser by LordNoteworthy" has been utilized. The ultimate goal of this project is to overcome the controls that malicious software implements in a sandbox or virtual machine environment to conceal its malicious activities.
 
+Technical blog post: [Escape From Evasion: Dominating Windows Functions with Detour](https://vvelitkn.com/malware%20analysis/Escape-From-Evasion-Dominating-Windows-Functions-with-Detour/)
+
 ## Content
 
 - [Project: Evasion Escaper](#project-evasion-escaper)
