@@ -25,6 +25,10 @@
 #include <WinBase.h>
 #include <TlHelp32.h>
 #include <psapi.h>
+#include <fstream>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
 
 std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 
@@ -149,6 +153,65 @@ void parse_ruleset(std::string file_name) {
 	return;
 }
 
+// Log entry struct
+struct LogEntry {
+	std::wstring timestamp;
+	std::wstring functionName;
+	std::wstring requestData;
+	std::wstring operation;
+};
+
+//-----------------------------------------------
+// Logger Function
+//-----------------------------------------------
+
+void addLogEntry(std::wstring functionName, std::wstring requestData, std::wstring operation) {
+	// Create new log entry
+	LogEntry entry = { functionName, requestData, operation };
+
+	// Only write to log file if the new entry is different from the previous one, in some cases same function is called too much times
+	// Checking the previous one to keep the log file clear
+	static LogEntry previousEntry = { L"", L"", L"" };
+	if (entry.functionName != previousEntry.functionName ||
+		entry.requestData != previousEntry.requestData ||
+		entry.operation != previousEntry.operation) {
+
+		// Update previous entry
+		previousEntry = entry;
+
+		// Get current time
+		std::time_t currentTime = std::time(nullptr);
+		std::tm localTime;
+		localtime_s(&localTime, &currentTime);
+
+		// Format timestamp
+		char timestampBuffer[20];
+		strftime(timestampBuffer, 20, "%Y-%m-%d %H_%M", &localTime);
+		std::wstring timestamp = converter.from_bytes(timestampBuffer);
+
+		// Append filename to path
+		std::wstring filename = L"Event_Log_" + timestamp + L".txt";
+		std::wstring fullpath = L"..\\Logs\\" + filename;
+
+		// Create Logs folder if it doesn't exist
+		CreateDirectory("..\\Logs\\", NULL);
+
+
+
+		// Open file for writing
+		std::ofstream file(fullpath, std::ios_base::app);
+		if (file.is_open()) {
+			file << "functionName: \"" << converter.to_bytes(functionName) << "\"\n{\n"
+				<< "\trequestData: \"" << converter.to_bytes(requestData) << "\",\n"
+				<< "\toperation: \"" << converter.to_bytes(operation) << "\"\n"
+				<< "}\n";
+
+			file.close();
+		}
+	}
+}
+
+
 //-----------------------------------------------
 // ProcessID Finder
 //-----------------------------------------------
@@ -184,6 +247,7 @@ int findMyProc(const char* procname) {
 BOOL WINAPI hGetUserNameW(LPWSTR lpBuffer, LPDWORD pcbBuffer)
 {
 	std::wstring randomstring = random_strings[0];
+	addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpBuffer, L"Changed to" + randomstring);
 	wcscpy_s(lpBuffer, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 	*pcbBuffer = (DWORD)wcslen(randomstring.c_str()) + 1;
 	return TRUE;
@@ -197,6 +261,7 @@ DWORD WINAPI hGetFileAttributesW(LPWSTR lpFileName)
 		{
 			if (StrStrIW(lpFileName, rule[0].c_str()))
 			{
+				addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpFileName, L"Returned INVALID_FILE_ATTRIBUTES");
 				return INVALID_FILE_ATTRIBUTES;
 				break;
 			}
@@ -221,18 +286,25 @@ PWSTR WINAPI hPathFindFileNameW(LPWSTR pszPath)
 	PathRemoveExtensionW(clean_pwResult);
 
 	std::wstring randomstring = random_strings[0];
-
+	
 	if (pwResult != NULL) {
 		for (const auto& rule : rules_Get) 
 		{
 			PWSTR match = wcsstr(pwResult, rule[0].c_str());
 			if (match != nullptr) {
+
 				wcscpy_s(pwResult, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
+
+				addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), pwResult, L"Changed to " + randomstring);
+				
 				break;
 			}
 			if ((wcslen(clean_pwResult) == 32 || wcslen(clean_pwResult) == 40 || wcslen(clean_pwResult) == 64) && IsHexString(clean_pwResult))
 			{
 				wcscpy_s(pwResult, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
+
+				addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), pwResult, L"Changed to " + randomstring);
+
 				break;
 			}
 		}
@@ -245,6 +317,7 @@ BOOL WINAPI hGetComputerNameW(LPWSTR lpBuffer, LPDWORD nSize)
 	std::wstring randomstring = random_strings[0];
 	wcscpy_s(lpBuffer, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 	*nSize = (DWORD)wcslen(randomstring.c_str()) + 1;
+	addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpBuffer, L"Changed to " + randomstring);
 	return TRUE;
 }
 
@@ -252,6 +325,7 @@ NTSTATUS NTAPI hNtSystemDebugControl(SYSDBG_COMMAND Command, PVOID InputBuffer, 
 {
 	if (Command == SYSDBG_COMMAND::SysDbgCheckLowMemory)
 	{
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"SysDbgCheckLowMemory", L"RETURN 0xC0000354L");
 		return 0xC0000354L;
 	}
 	NTSTATUS result = oNtSystemDebugControl(Command, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength, ReturnLength);
@@ -260,28 +334,38 @@ NTSTATUS NTAPI hNtSystemDebugControl(SYSDBG_COMMAND Command, PVOID InputBuffer, 
 
 NTSTATUS NTAPI hNtYieldExecution()
 {
+	// This function's log appears too many times, to keep the log file clear it is commented
+	//addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"NTSTATUS", L"RETURN 0x40000024");
 	return 0x40000024;
 }
 
 NTSTATUS WINAPI hNtDelayExecution(BOOL Alertable, PLARGE_INTEGER DelayInterval)
 {
+	addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(DelayInterval->QuadPart), L"Changed to 1");
 	DelayInterval->QuadPart = 1;
 	NTSTATUS result = oNtDelayExecution(Alertable, DelayInterval);
+	
 	return result;
 }
 
 UINT WINAPI hSetTimer(HWND hWnd, UINT_PTR nIDEvent, UINT uElapse, TIMERPROC lpTimerFunc)
 {
-	if (uElapse > 100)
-		uElapse = 100;
+	if (uElapse > 100) 
+	{
+	addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(uElapse), L"Changed to 100");
+	uElapse = 100;
+	}
+		
 	UINT result = oSetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc);
 	return result;
 }
 
 MMRESULT WINAPI hTimeSetEvent(UINT uDelay, UINT uResolution, LPTIMECALLBACK lpTimeProc, DWORD_PTR dwUser, UINT fuEvent)
 {
-	if (uDelay > 100)
+	if (uDelay > 100) {
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(uDelay), L"Changed to 100");
 		uDelay = 100;
+	}
 
 	MMRESULT result = oTimeSetEvent(uDelay, uResolution, lpTimeProc, dwUser, fuEvent);
 	return result;
@@ -290,14 +374,18 @@ MMRESULT WINAPI hTimeSetEvent(UINT uDelay, UINT uResolution, LPTIMECALLBACK lpTi
 BOOL called_SetWaitableTimer = FALSE;
 DWORD WINAPI hWaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds)
 {
-	if (dwMilliseconds > 100 && dwMilliseconds != INFINITE)
+	if (dwMilliseconds > 100 && dwMilliseconds != INFINITE) {
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(dwMilliseconds), L"Changed to 100");
 		dwMilliseconds = 100;
+	}
+		
 
 	// If WaitForSingleObject called after SetWaitableTimer, dwMilliseconds will be INFINITE,
 	// else INFINITE could be set by other functions, we should not touch to reduce errors
 	// As a solution a bool created and checked -> called_SetWaitableTimer
 	// called_SetWaitableTimer checks if SetWaitableTimer called before, if it called we return WAIT_OBJECT_0
 	if (dwMilliseconds == INFINITE && called_SetWaitableTimer == TRUE) {
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"after SetWaitableTimer with INFINITE", L"Changed to 100");
 		DWORD result = oWaitForSingleObject(hHandle, 1000);
 		called_SetWaitableTimer = FALSE;
 		return WAIT_OBJECT_0;
@@ -309,8 +397,12 @@ DWORD WINAPI hWaitForSingleObject(HANDLE hHandle, DWORD dwMilliseconds)
 
 DWORD WINAPI hIcmpSendEcho(HANDLE IcmpHandle, IPAddr DestinationAddress, LPVOID RequestData, WORD RequestSize, PIP_OPTION_INFORMATION RequestOptions, LPVOID ReplyBuffer, DWORD ReplySize, DWORD Timeout)
 {
-	if (Timeout > 100)
+	if (Timeout > 100) 
+	{
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(Timeout), L"Changed to 100");
 		Timeout = 100;
+	}
+		
 
 	DWORD result = oIcmpSendEcho(IcmpHandle, DestinationAddress, RequestData, RequestSize, RequestOptions, ReplyBuffer, ReplySize, Timeout);
 	return result;
@@ -322,9 +414,11 @@ BOOL WINAPI hSetWaitableTimer(HANDLE hTimer, LARGE_INTEGER* pDueTime, LONG lPeri
 	correctedDueTime.QuadPart = pDueTime->QuadPart;
 
 	// if due time is greater than 1 second
-	if (correctedDueTime.QuadPart > -1000000LL)
+	if (correctedDueTime.QuadPart > -1000000LL) {
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(pDueTime->QuadPart), L"Changed to -1000000LL, 1 second");
 		correctedDueTime.QuadPart = -1000000LL;
-
+	}
+		
 	BOOL result = oSetWaitableTimer(hTimer, &correctedDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, fResume);
 	called_SetWaitableTimer = TRUE;
 	return result;
@@ -333,8 +427,11 @@ BOOL WINAPI hSetWaitableTimer(HANDLE hTimer, LARGE_INTEGER* pDueTime, LONG lPeri
 BOOL WINAPI hCreateTimerQueueTimer(PHANDLE phNewTimer, HANDLE TimerQueue, WAITORTIMERCALLBACK Callback, PVOID Parameter, DWORD DueTime, DWORD Period, ULONG Flags)
 {
 	if (DueTime > 100)
+	{
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), std::to_wstring(DueTime), L"Changed to 100");
 		DueTime = 100;
-
+	}
+		
 	BOOL result = oCreateTimerQueueTimer(phNewTimer, TimerQueue, Callback, Parameter, DueTime, Period, Flags);
 	return result;
 }
@@ -343,7 +440,7 @@ BOOL WINAPI hCreateTimerQueueTimer(PHANDLE phNewTimer, HANDLE TimerQueue, WAITOR
 BOOL WINAPI hGetComputerNameA(LPWSTR lpBuffer, LPDWORD nSize)
 {
 	std::wstring randomstring = random_strings[0];
-
+	addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpBuffer, L"Changed to "+ randomstring);
 	wcscpy_s(lpBuffer, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 	*nSize = (DWORD)wcslen(randomstring.c_str()) + 1;
 
@@ -356,6 +453,7 @@ BOOL WINAPI hSetHandleInformation(HANDLE hObject, DWORD  dwMask, DWORD  dwFlags)
 	// malware tries calling to SetHandleInformation that is trying to protect a handle from being closed
 	if (dwMask == HANDLE_FLAG_PROTECT_FROM_CLOSE && dwFlags == HANDLE_FLAG_PROTECT_FROM_CLOSE)
 	{
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"HANDLE_FLAG_PROTECT_FROM_CLOSE", L"Changed to 0");
 		// Now that the handle is no longer protected, it can be closed without triggering an exception
 		return oSetHandleInformation(hObject, HANDLE_FLAG_PROTECT_FROM_CLOSE, 0);
 	}
@@ -377,6 +475,7 @@ BOOL WINAPI hSetupDiGetDeviceRegistryPropertyW(HDEVINFO DeviceInfoSet, PSP_DEVIN
 		{
 			if (StrStrIW(pBuffer, rule[0].c_str())) {
 				std::wstring randomstring = random_strings[0];
+				addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), pBuffer, L"Changed to " + randomstring);
 				wcscpy_s(pBuffer, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 				return result;
 			}
@@ -411,7 +510,7 @@ BOOL WINAPI hEnumServicesStatusExW(SC_HANDLE hSCManager, SC_ENUM_TYPE InfoLevel,
 				{
 					// To reduce the errors we set randomstring length to actual string
 					std::wstring randomstring = random_strings[0].substr(0, wcslen(newServices[i].lpServiceName));
-
+					addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), newServices[i].lpServiceName, L"Changed to " + randomstring);
 					wcscpy_s(newServices[i].lpServiceName, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 					wcscpy_s(newServices[i].lpDisplayName, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 					break;
@@ -441,6 +540,7 @@ ULONG WINAPI hGetSystemFirmwareTable(DWORD FirmwareTableProviderSignature, DWORD
 		{
 			if (memcmp(&firmwareTable[i], reinterpret_cast<PBYTE>(&needle), needleLen) == 0)
 			{
+				addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), converter.from_bytes(firmwareTable[i]), L"Changed to " + converter.from_bytes(randomChars.substr(0, needleLen)));
 				memcpy(&firmwareTable[i], &randomChars[0], needleLen);
 			}
 		}
@@ -457,8 +557,9 @@ UINT WINAPI hEnumSystemFirmwareTables(DWORD FirmwareTableProviderSignature, PVOI
 
 	if ((BufferSize / sizeof(FIRMWARE_TABLE_ENTRY)) < 4)
 	{
+		
 		int numAdditionalTables = 4 - (BufferSize / sizeof(FIRMWARE_TABLE_ENTRY));
-
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"Less than 4 firmware table: "+ std::to_wstring(BufferSize / sizeof(FIRMWARE_TABLE_ENTRY)), L"Created " + std::to_wstring(numAdditionalTables) + L" more");
 		// Create dummmy firmware table data to bypass count condition
 		std::vector<BYTE> randomData(256);
 		for (int i = 0; i < numAdditionalTables; i++)
@@ -490,6 +591,8 @@ BOOL WINAPI hGetDiskFreeSpaceExW(LPCWSTR lpDirectoryName, PULARGE_INTEGER lpFree
 	// Modify the free disk space to 490 GB
 	if (lpTotalNumberOfBytes != NULL)
 	{
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"lpTotalNumberOfBytes < 490GB", L"Changed to 490GB");
+
 		ULARGE_INTEGER newSize;
 		newSize.QuadPart = 490LL * 1024LL * 1024LL * 1024LL;  // Set new size to 490 GB
 		*lpTotalNumberOfBytes = newSize;
@@ -505,6 +608,7 @@ LSTATUS WINAPI hRegQueryValueExW(HKEY hKey, LPCWSTR lpValueName, LPDWORD lpReser
 	for (const auto& rule : rules_RegQueryValueExW)
 	{
 		if (StrStrIW(pData, rule[0].c_str())) {
+			addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), pData, L"RETURN ERROR_FILE_NOT_FOUND");
 			// The buffer contains, so we return an error code
 			return ERROR_FILE_NOT_FOUND;
 		}
@@ -518,6 +622,7 @@ LSTATUS WINAPI hRegEnumKeyExW(HKEY hKey, DWORD dwIndex, LPWSTR lpName, LPDWORD l
 	for (const auto& rule : rules_RegEnumKeyExW)
 	{
 		if (StrStrIW(lpName, rule[0].c_str())) {
+			addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpName, L"RETURN ERROR_FILE_NOT_FOUND");
 			// The buffer contains, so we return an error code
 			return ERROR_FILE_NOT_FOUND;
 		}
@@ -533,6 +638,7 @@ LSTATUS WINAPI hRegOpenKeyExW(HKEY hKey, LPCSTR lpSubKey, DWORD ulOptions, REGSA
 	{
 		if (StrStrIW(converter.from_bytes(lpSubKey).c_str(), rule[0].c_str()))
 		{
+			addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), converter.from_bytes(lpSubKey).c_str(), L"RETURN ERROR_FILE_NOT_FOUND");
 			result = ERROR_FILE_NOT_FOUND;
 			break;
 		}
@@ -545,9 +651,9 @@ BOOL WINAPI hGetComputerNameExW(COMPUTER_NAME_FORMAT NameType, LPWSTR lpBuffer, 
 	if (lpBuffer != NULL) {
 		for (const auto& rule : rules_GetComputerNameExW)
 		{
-			// No need to double check with StrCmpNIW but why not
 			if (StrStrIW(lpBuffer, rule[0].c_str())) {
 				std::wstring randomstring = random_strings[0];
+				addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpBuffer, L"Changed to "+ randomstring);
 				wcscpy_s(lpBuffer, wcslen(randomstring.c_str()) + 1, randomstring.c_str());
 				*nSize = (DWORD)wcslen(randomstring.c_str()) + 1;
 				return TRUE;
@@ -562,6 +668,8 @@ HMODULE WINAPI hGetModuleHandleW(const LPCWSTR lpModuleName)
 	for (const auto& rule : rules_GetModuleHandleW)
 	{
 		if (StrStrIW(rule[0].c_str(), lpModuleName))
+			// FIX NEEDED
+			//addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpModuleName, L"RETURN NULL");
 			return NULL;
 	}
 	return oGetModuleHandleW(lpModuleName);
@@ -590,7 +698,7 @@ HRESULT __stdcall hExecQueryFunc(void* pThis, const BSTR strQueryLanguage, BSTR 
 
             // Allocate memory for BSTRs
             BSTR combinedBstr = SysAllocStringLen(bstr, SysStringLen(bstr) + wstr.length());
-
+			addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), queryStr, L"Changed to Select * From " + wstr);
             // Concatenate BSTR and wstr 
             wcscat_s(combinedBstr, MAX_PATH, wstr.c_str());
             strQuery = combinedBstr;
@@ -612,9 +720,10 @@ HANDLE WINAPI hCreateToolhelp32Snapshot(DWORD dwFlags, DWORD th32ProcessID)
 		BOOL bSuccess = Process32First(hSnapshot, &pe32);
 		while (bSuccess) {
 			for (const auto& rule : rules_CreateToolhelp32Snapshot) {
-				if (StrCmpIW(converter.from_bytes(exeName).c_str(), rule[0].c_str()) != NULL) {
+				if (!StrCmpIW(converter.from_bytes(pe32.szExeFile).c_str(), rule[0].c_str())) {
 					std::wstring random_string = random_strings[0].substr(0, strlen(pe32.szExeFile)-4) + L".exe";
 					std::string narrow_string = converter.to_bytes(random_string);
+					addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), converter.from_bytes(pe32.szExeFile), L"Changed to " + random_string);
 					strcpy_s(pe32.szExeFile, narrow_string.length() + 1, narrow_string.c_str());
 					break;
 				}
@@ -637,6 +746,7 @@ HRESULT __stdcall hGetFunc(void* pThis, LPCWSTR wszName, LONG lFlags, VARIANTARG
     
 	    if (StrStrIW(wszName, queryGet) && StrStrIW(queryFrom.c_str(), rule_queryFrom))
 	    {
+			addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"From " + queryFrom + L" "+ wszName, L"Changed to " + rule[2]);
 	    	VariantClear(pValue);
 	    	pValue->vt = VT_BSTR;
 	    	pValue->bstrVal = SysAllocString(rule[2].c_str());
