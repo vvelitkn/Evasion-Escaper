@@ -15,7 +15,6 @@ avoid,usb
 avoid,tz
 avoid,samp
 ExecQuery,Win32_Processor,Win32_ComputerSystem
-ExecQuery,MSAcpi_ThermalZoneTemperature,Win32_ComputerSystem
 ExecQuery,Win32_Fan,Win32_BIOS
 ExecQuery,Win32_PhysicalMemory,Win32_Environment
 ExecQuery,Win32_CacheMemory,Win32_Environment
@@ -33,6 +32,8 @@ ExecQuery,Win32_PerfFormattedData_Counters_ThermalZoneInformation,CIM_Memory
 ExecQuery,CIM_Sensor,CIM_Memory
 ExecQuery,CIM_Memory,CIM_Memory
 ExecQuery,CIM_PhysicalConnector,Win32_Environment
+ExecQuery,MSAcpi_ThermalZoneTemperature,Win32_Processor
+Get,Win32_Processor,CurrentTemperature,5900
 Get,Win32_ComputerSystem,Model,random
 Get,Win32_ComputerSystem,Manufacturer,random
 Get,Win32_VideoController,Caption,random
