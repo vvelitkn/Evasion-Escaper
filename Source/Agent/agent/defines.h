@@ -183,6 +183,11 @@ typedef struct _FIRMWARE_TABLE_ENTRY {
 	DWORD FirmwareTableID;
 } FIRMWARE_TABLE_ENTRY, * PFIRMWARE_TABLE_ENTRY;
 
-
 typedef UINT(WINAPI* tEnumSystemFirmwareTables)(DWORD, PVOID, DWORD);
 tEnumSystemFirmwareTables oEnumSystemFirmwareTables = NULL;
+
+typedef HANDLE(WINAPI* tCreateFile)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+tCreateFile oCreateFile = NULL;
+
+typedef DWORD(WINAPI* tGetAdaptersInfo)(PIP_ADAPTER_INFO, PULONG);
+tGetAdaptersInfo oGetAdaptersInfo = NULL;

@@ -6,9 +6,23 @@ The primary objective of this project is to evade the various checks that malici
 
 Technical blog post: [Escape From Evasion: Dominating Windows Functions with Detour](https://vvelitkn.com/malware%20analysis/Escape-From-Evasion-Dominating-Windows-Functions-with-Detour/)
 
+
+## Changelog
+
+### v1.1.0 - Maintenance & Refactoring Update (08.02.2025)
+
+* Tested & Maintained: Verified the functionality on Windows 10 in VMware.
+* Simplified Installation: Just run Build.ps1 (requires Visual Studio 2022 with C++ packages).
+* Code Refactoring: Separated and reorganized functions.
+* Bug Fix: Resolved issues with fastprox.dll and its symbols that previously caused failures.
+* Potential Bug Fix Clarified: Provided instructions for resolving symbol load/find errors related to fastprox.dll.
+* General Improvements: Improved maintainability and documentation.
+
 ## Content
 
 - [Project: Evasion Escaper](#project-evasion-escaper)
+  - [Changelog](#changelog)
+    - [v1.1.0 - Maintenance \& Refactoring Update (08.02.2025)](#v110---maintenance--refactoring-update-08022025)
   - [Content](#content)
   - [Bypass Methods for Application Checks in Evasion Escaper](#bypass-methods-for-application-checks-in-evasion-escaper)
   - [Other Solutions \& Additional Sources](#other-solutions--additional-sources)
@@ -49,17 +63,12 @@ This project is open to ongoing development and contribution, with plans to add 
 To install Evasion Escaper, follow these simple steps:
 
 - Clone or download the project from the GitHub repository: https://github.com/vvelitkn/Evasion-Escaper
-- Navigate to the Bin folder and run the install.reg, needs administrative privileges. This will make the necessary registry changes.
-- Open the agent.sln file in Visual Studio 2022 and build the solution. This will generate the agent.dll file in the Bin folder.
-- That's it! Evasion Escaper is now ready to use.
+- Run `Build.ps1` as administrator. This will build the project and execute `install.bat` and `install.reg` automatically.
 
 ## Usage
 
-- Make sure the agent.dll file located in the Bin folder to your project directory. If not repeat the Installation steps.
-- Rename the target executable file to target.exe (Al-Khaser sample compiled and zipped under Bin folder, password: infected)
-- Run the install.bat file with administrative privileges: right-click on the file and select "Run as administrator".
-- Execute target.exe.
-- When the target.exe is executed, the agent.dll file will automatically be loaded and any necessary setup will be performed.
+- Rename the sample executable file to `target.exe`.
+- Execute `target.exe`.
 
 Note: Make sure to run your project in a virtual environment. Do not test it on your actual device.
 
@@ -79,3 +88,4 @@ Evasion Escaper is licensed under the Apache License 2.0. This means that it is 
 
 - Al-Khaser tool: https://github.com//LordNoteworthy/al-khaser.
 - Pafish tool: https://github.com/a0rtega/pafish.
+- Microsoft Detours: https://github.com/microsoft/Detours

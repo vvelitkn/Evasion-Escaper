@@ -13,6 +13,7 @@
 #include <Shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
 #include "detours.h"
+#pragma comment(lib, "detours.lib")
 #include "defines.h"
 #include <tlhelp32.h>
 #include <fstream>
@@ -29,6 +30,7 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+
 
 std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 
@@ -59,7 +61,16 @@ std::wstring random_strings[] = {
 const int MAX_LEN = 10;
 const int NUM_STRINGS = 5;
 
-void parse_ruleset(std::string file_name) {
+// Convert UTF-8 (std::string) to UTF-16 (std::wstring)
+std::wstring stringToWString(const std::string& str) {
+	if (str.empty()) return std::wstring();
+	int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+	std::wstring wstrTo(size_needed, 0);
+	MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+	return wstrTo;
+}
+
+BOOL parse_ruleset(std::string file_name) {
 	std::ifstream file(file_name);
 	std::string line;
 	while (std::getline(file, line)) {
@@ -150,7 +161,7 @@ void parse_ruleset(std::string file_name) {
 				});
 		}
 	}
-	return;
+	return true;
 }
 
 // Log entry struct
@@ -169,15 +180,13 @@ void addLogEntry(std::wstring functionName, std::wstring requestData, std::wstri
 	// Create new log entry
 	LogEntry entry = { functionName, requestData, operation };
 
-	// Only write to log file if the new entry is different from the previous one, in some cases same function is called too much times
-	// Checking the previous one to keep the log file clear
+	// Prevent duplicate entries
 	static LogEntry previousEntry = { L"", L"", L"" };
 	if (entry.functionName != previousEntry.functionName ||
 		entry.requestData != previousEntry.requestData ||
 		entry.operation != previousEntry.operation) {
 
-		// Update previous entry
-		previousEntry = entry;
+		previousEntry = entry; // Update previous entry
 
 		// Get current time
 		std::time_t currentTime = std::time(nullptr);
@@ -185,60 +194,56 @@ void addLogEntry(std::wstring functionName, std::wstring requestData, std::wstri
 		localtime_s(&localTime, &currentTime);
 
 		// Format timestamp
-		char timestampBuffer[20];
-		strftime(timestampBuffer, 20, "%Y-%m-%d %H_%M", &localTime);
-		std::wstring timestamp = converter.from_bytes(timestampBuffer);
+		wchar_t timestampBuffer[20];
+		wcsftime(timestampBuffer, 20, L"%Y-%m-%d %H_%M", &localTime);
 
 		// Append filename to path
-		std::wstring filename = L"Event_Log_" + timestamp + L".txt";
+		std::wstring filename = L"Event_Log_" + std::wstring(timestampBuffer) + L".txt";
 		std::wstring fullpath = L"..\\Logs\\" + filename;
 
-		// Create Logs folder if it doesn't exist
+		// Create Logs folder if it doesn't exist (Fixed: Wide string)
 		CreateDirectory("..\\Logs\\", NULL);
 
-
-
-		// Open file for writing
-		std::ofstream file(fullpath, std::ios_base::app);
+		// Open file for writing (Fixed: Use wofstream for wide strings)
+		std::wofstream file(fullpath, std::ios_base::app);
 		if (file.is_open()) {
-			file << "functionName: \"" << converter.to_bytes(functionName) << "\"\n{\n"
-				<< "\trequestData: \"" << converter.to_bytes(requestData) << "\",\n"
-				<< "\toperation: \"" << converter.to_bytes(operation) << "\"\n"
-				<< "}\n";
+			file << L"functionName: \"" << functionName << L"\"\n{\n"
+				<< L"\trequestData: \"" << requestData << L"\",\n"
+				<< L"\toperation: \"" << operation << L"\"\n"
+				<< L"}\n";
 
 			file.close();
 		}
 	}
 }
 
-
 //-----------------------------------------------
 // ProcessID Finder
 //-----------------------------------------------
 
 int findMyProc(const char* procname) {
-
 	HANDLE hSnapshot;
-	PROCESSENTRY32 pe;
+	PROCESSENTRY32W pe;
 	int pid = 0;
 	BOOL hResult;
 	hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 	if (INVALID_HANDLE_VALUE == hSnapshot) return 0;
 
-	pe.dwSize = sizeof(PROCESSENTRY32);
-	hResult = Process32First(hSnapshot, &pe);
+	pe.dwSize = sizeof(PROCESSENTRY32W);
+	hResult = Process32FirstW(hSnapshot, &pe);
 	while (hResult) {
+		wchar_t wideProcName[MAX_PATH];
+		MultiByteToWideChar(CP_ACP, 0, procname, -1, wideProcName, MAX_PATH);
 
-		if (strcmp(procname, pe.szExeFile) == 0) {
+		if (wcscmp(wideProcName, pe.szExeFile) == 0) {
 			pid = pe.th32ProcessID;
 			break;
 		}
-		hResult = Process32Next(hSnapshot, &pe);
+		hResult = Process32NextW(hSnapshot, &pe);
 	}
 	CloseHandle(hSnapshot);
 	return pid;
 }
-
 
 //-----------------------------------------------
 // Modified Functions
@@ -548,6 +553,28 @@ ULONG WINAPI hGetSystemFirmwareTable(DWORD FirmwareTableProviderSignature, DWORD
 	return result;
 }
 
+DWORD WINAPI hGetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
+{
+	DWORD dwResult = oGetAdaptersInfo(pAdapterInfo, pOutBufLen);
+
+	if (dwResult == ERROR_SUCCESS && pAdapterInfo != NULL)
+	{
+		PIP_ADAPTER_INFO pAdapter = pAdapterInfo;
+
+		while (pAdapter)
+		{
+			// Realtek PCIe GbE Family Controller -> 7C:8A:E1
+			pAdapter->Address[0] = 0x7C;
+			pAdapter->Address[1] = 0x8A;
+			pAdapter->Address[2] = 0xE1;
+
+			pAdapter = pAdapter->Next;
+		}
+	}
+
+	return dwResult;
+}
+
 UINT WINAPI hEnumSystemFirmwareTables(DWORD FirmwareTableProviderSignature, PVOID pFirmwareTableEnumBuffer, DWORD BufferSize)
 {
 	UINT result = oEnumSystemFirmwareTables(FirmwareTableProviderSignature, pFirmwareTableEnumBuffer, BufferSize);
@@ -646,6 +673,23 @@ LSTATUS WINAPI hRegOpenKeyExW(HKEY hKey, LPCSTR lpSubKey, DWORD ulOptions, REGSA
 	return result;
 }
 
+HANDLE WINAPI hCreateFile(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
+	LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition,
+	DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)
+{
+	if (wcsstr(lpFileName, L"HGFS") || wcsstr(lpFileName, L"vmci")) {
+		// Return a valid handle instead of calling CreateFile
+		// This bypasses the check (for VMware devices)
+		addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), lpFileName, L"Returned INVALID_HANDLE_VALUE");
+		return INVALID_HANDLE_VALUE;
+	}
+
+	// Call the original CreateFileW for all other cases
+	return oCreateFile(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
+		dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+}
+
+
 BOOL WINAPI hGetComputerNameExW(COMPUTER_NAME_FORMAT NameType, LPWSTR lpBuffer, LPDWORD nSize)
 {
 	if (lpBuffer != NULL) {
@@ -709,36 +753,42 @@ HRESULT __stdcall hExecQueryFunc(void* pThis, const BSTR strQueryLanguage, BSTR 
     return hResult;
 }
 
-HANDLE WINAPI hCreateToolhelp32Snapshot(DWORD dwFlags, DWORD th32ProcessID)
-{
+HANDLE WINAPI hCreateToolhelp32Snapshot(DWORD dwFlags, DWORD th32ProcessID) {
 	HANDLE hSnapshot = oCreateToolhelp32Snapshot(dwFlags, th32ProcessID);
-
 	if (hSnapshot != INVALID_HANDLE_VALUE) {
-		PROCESSENTRY32 pe32 = { 0 };
-		pe32.dwSize = sizeof(PROCESSENTRY32);
-		std::string exeName = pe32.szExeFile;
-		BOOL bSuccess = Process32First(hSnapshot, &pe32);
+		PROCESSENTRY32W pe32 = { 0 };
+		pe32.dwSize = sizeof(PROCESSENTRY32W);
+		BOOL bSuccess = Process32FirstW(hSnapshot, &pe32);
+
 		while (bSuccess) {
 			for (const auto& rule : rules_CreateToolhelp32Snapshot) {
-				if (!StrCmpIW(converter.from_bytes(pe32.szExeFile).c_str(), rule[0].c_str())) {
-					std::wstring random_string = random_strings[0].substr(0, strlen(pe32.szExeFile)-4) + L".exe";
-					std::string narrow_string = converter.to_bytes(random_string);
-					addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), converter.from_bytes(pe32.szExeFile), L"Changed to " + random_string);
-					strcpy_s(pe32.szExeFile, narrow_string.length() + 1, narrow_string.c_str());
+				// Assuming rule[0] is already a wide string. If not, please let me know the type
+				const std::wstring& ruleWstr = rule[0];
+
+				if (!StrCmpIW(pe32.szExeFile, ruleWstr.c_str())) {
+					// Use random_strings directly since it's already std::wstring
+					std::wstring random_string = random_strings[0].substr(0, wcslen(pe32.szExeFile) - 4) + L".exe";
+
+					// Ensure buffer size is sufficient
+					if (random_string.length() < MAX_PATH) {
+						wcscpy_s(pe32.szExeFile, MAX_PATH, random_string.c_str());
+						addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1),
+							ruleWstr.c_str(),
+							L"Changed to " + random_string);
+					}
 					break;
 				}
 			}
-			bSuccess = Process32Next(hSnapshot, &pe32);
+			bSuccess = Process32NextW(hSnapshot, &pe32);
 		}
 	}
-
 	return hSnapshot;
 }
 
 HRESULT __stdcall hGetFunc(void* pThis, LPCWSTR wszName, LONG lFlags, VARIANTARG* pValue, LONG type, LONG plFlavor)
 {
 	HRESULT hResult = oGetFunc(pThis, wszName, lFlags, pValue, type, plFlavor);
-	
+
 	for (const auto& rule : rules_Get)
     {
 	    LPCWSTR rule_queryFrom = rule[0].c_str();
@@ -751,305 +801,292 @@ HRESULT __stdcall hGetFunc(void* pThis, LPCWSTR wszName, LONG lFlags, VARIANTARG
 	    	pValue->vt = VT_BSTR;
 	    	pValue->bstrVal = SysAllocString(rule[2].c_str());
 	    }
+		else
+		{
+			addLogEntry(std::wstring(converter.from_bytes(__FUNCTION__)).substr(1), L"From " + queryFrom + L" " + wszName, L"Changed to same");
+		}
     }
 
 return hResult;
 
 }
 
-LPVOID lpGetModuleHandleW = NULL;
-LPVOID lpGetUserNameW = NULL;
-LPVOID lpGetComputerNameW = NULL;
-LPVOID lpGetComputerNameA = NULL;
-LPVOID lpGetComputerNameExW = NULL;
-LPVOID lpGetFileAttributesW = NULL;
-LPVOID lpPathFindFileNameW = NULL;
-LPVOID lpNtSystemDebugControl = NULL;
-LPVOID lpNtYieldExecution = NULL;
-LPVOID lpSetHandleInformation = NULL;
-LPVOID lpSetupDiGetDeviceRegistryPropertyW = NULL;
-LPVOID lpEnumServicesStatusExW = NULL;
-LPVOID lpGetDiskFreeSpaceExW = NULL;
-LPVOID lpRegQueryValueExW = NULL;
-LPVOID lpRegEnumKeyExW = NULL;
-LPVOID lpNtDelayExecution = NULL;
-LPVOID lpSetTimer = NULL;
-LPVOID lpTimeSetEvent = NULL;
-LPVOID lpWaitForSingleObject = NULL;
-LPVOID lpIcmpSendEcho = NULL;
-LPVOID lpSetWaitableTimer = NULL;
-LPVOID lpCreateTimerQueueTimer = NULL;
-LPVOID lpCreateToolhelp32Snapshot = NULL;
-LPVOID lpRegOpenKeyExW = NULL;
-LPVOID lpGetSystemFirmwareTable = NULL;
-LPVOID lpEnumSystemFirmwareTables = NULL;
-HMODULE hAdvapi32 = NULL;
-HMODULE hKernel32 = NULL;
-HMODULE hNtdll = NULL;
-HMODULE hSetupapi = NULL;
-HMODULE hUser32 = NULL;
-HMODULE hWinmm = NULL;
-HMODULE hIphlpapi = NULL;
 
+// Structure for hook configuration
+struct HookInfo {
+	const wchar_t* dllName;    // DLL containing the target function
+	const char* functionName;   // Name of function to hook
+	HMODULE* hModule;          // Module handle
+	LPVOID* lpFunction;        // Original function pointer
+	LPVOID hookFunction;       // Hook function pointer
+	LPVOID* originalFunction;  // Storage for original function
+};
 
-VOID NTAPI DllLoadCallback(PWSTR lpDLLName, PVOID lpDLLBase, SIZE_T size, PVOID lpReserved)
-{
-	// Parse ruleset and save them in corresponding vector arrays
-	static bool parsed = false;
-	if (!parsed) {
-		parse_ruleset("ruleset.txt");
-		parsed = true;
+namespace {
+	// Module handles
+	HMODULE hKernel32 = nullptr;
+	HMODULE hAdvapi32 = nullptr;
+	HMODULE hNtdll = nullptr;
+	HMODULE hUser32 = nullptr;
+	HMODULE hWinmm = nullptr;
+	HMODULE hIphlpapi = nullptr;
+	HMODULE hSetupapi = nullptr;
+	HMODULE hShlwapi = nullptr;
+
+	// Function pointers and originals
+	LPVOID lpGetModuleHandleW = NULL;
+	LPVOID lpGetUserNameW = NULL;
+	LPVOID lpGetComputerNameW = NULL;
+	LPVOID lpGetComputerNameA = NULL;
+	LPVOID lpGetComputerNameExW = NULL;
+	LPVOID lpGetFileAttributesW = NULL;
+	LPVOID lpPathFindFileNameW = NULL;
+	LPVOID lpNtSystemDebugControl = NULL;
+	LPVOID lpNtYieldExecution = NULL;
+	LPVOID lpSetHandleInformation = NULL;
+	LPVOID lpSetupDiGetDeviceRegistryPropertyW = NULL;
+	LPVOID lpEnumServicesStatusExW = NULL;
+	LPVOID lpGetDiskFreeSpaceExW = NULL;
+	LPVOID lpRegQueryValueExW = NULL;
+	LPVOID lpRegEnumKeyExW = NULL;
+	LPVOID lpNtDelayExecution = NULL;
+	LPVOID lpSetTimer = NULL;
+	LPVOID lpTimeSetEvent = NULL;
+	LPVOID lpWaitForSingleObject = NULL;
+	LPVOID lpIcmpSendEcho = NULL;
+	LPVOID lpSetWaitableTimer = NULL;
+	LPVOID lpCreateTimerQueueTimer = NULL;
+	LPVOID lpCreateToolhelp32Snapshot = NULL;
+	LPVOID lpRegOpenKeyExW = NULL;
+	LPVOID lpGetSystemFirmwareTable = NULL;
+	LPVOID lpEnumSystemFirmwareTables = NULL;
+	LPVOID lpCreateFile = NULL;
+	LPVOID lpGetAdaptersInfo = NULL;
+
+	// Debug logging helper
+#ifdef DEBUG
+	void DebugLog(const wchar_t* format, ...) {
+		wchar_t buffer[512];
+		va_list args;
+		va_start(args, format);
+		vswprintf_s(buffer, format, args);
+		va_end(args);
+		OutputDebugStringW(buffer);
 	}
+#define DEBUG_LOG(...) DebugLog(__VA_ARGS__)
+#else
+#define DEBUG_LOG(...)
+#endif
 
-	//GetModuleHandleW Bypass
-	if (lpGetModuleHandleW == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetModuleHandleW = GetProcAddress(hKernel32, "GetModuleHandleW");
-
-		if (lpGetModuleHandleW != NULL)
-			oGetModuleHandleW = reinterpret_cast<tGetModuleHandleW>(DetourFunction(reinterpret_cast<PBYTE>(lpGetModuleHandleW), reinterpret_cast<PBYTE>(hGetModuleHandleW)));
-	}
-
-
-	//GetUserNameW Bypass
-	if (lpGetUserNameW == NULL) {
-		hAdvapi32 = GetModuleHandleW(L"advapi32.dll");
-		lpGetUserNameW = GetProcAddress(hAdvapi32, "GetUserNameW");
-		
-		if (lpGetUserNameW != NULL)
-			oGetUserNameW = reinterpret_cast<tGetUserNameW>(DetourFunction(reinterpret_cast<PBYTE>(lpGetUserNameW), reinterpret_cast<PBYTE>(hGetUserNameW)));
+	// Hook installation helper
+	bool InstallHook(const HookInfo& hook) {
+		if (*hook.lpFunction != nullptr) {
+			return true;  // Hook already installed
 		}
 
-	//GetComputerNameW Bypass
-	if (lpGetComputerNameW == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetComputerNameW = GetProcAddress(hKernel32, "GetComputerNameW");
-
-		if (lpGetComputerNameW != NULL)
-			oGetComputerNameW = reinterpret_cast<tGetComputerNameW>(DetourFunction(reinterpret_cast<PBYTE>(lpGetComputerNameW), reinterpret_cast<PBYTE>(hGetComputerNameW)));
-	}
-
-	//GetComputerNameA Bypass
-	if (lpGetComputerNameA == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetComputerNameA = GetProcAddress(hKernel32, "GetComputerNameA");
-
-		if (lpGetComputerNameA != NULL)
-			oGetComputerNameA = reinterpret_cast<tGetComputerNameA>(DetourFunction(reinterpret_cast<PBYTE>(lpGetComputerNameA), reinterpret_cast<PBYTE>(hGetComputerNameA)));
-	}
-
-	//GetComputerNameExW Bypass
-	if (lpGetComputerNameExW == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetComputerNameExW = GetProcAddress(hKernel32, "GetComputerNameExW");
-
-		if (lpGetComputerNameExW != NULL)
-			oGetComputerNameExW = reinterpret_cast<tGetComputerNameExW>(DetourFunction(reinterpret_cast<PBYTE>(lpGetComputerNameExW), reinterpret_cast<PBYTE>(hGetComputerNameExW)));
-	}
-
-	//GetFileAttributesW Bypass
-	if (lpGetFileAttributesW == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetFileAttributesW = GetProcAddress(hKernel32, "GetFileAttributesW");
-
-		if (lpGetFileAttributesW != NULL)
-			oGetFileAttributesW = reinterpret_cast<tGetFileAttributesW>(DetourFunction(reinterpret_cast<PBYTE>(lpGetFileAttributesW), reinterpret_cast<PBYTE>(hGetFileAttributesW)));
-	}
-
-	//PathFindFileNameW Bypass
-	if (lpPathFindFileNameW == NULL) {
-		hKernel32 = GetModuleHandleW(L"Shlwapi.dll");
-		lpPathFindFileNameW = GetProcAddress(hKernel32, "PathFindFileNameW");
-		if (lpPathFindFileNameW != NULL)
-			oPathFindFileNameW = reinterpret_cast<tPathFindFileNameW>(DetourFunction(reinterpret_cast<PBYTE>(lpPathFindFileNameW), reinterpret_cast<PBYTE>(hPathFindFileNameW)));
-	}
-
-	//NtSystemDebugControl Bypass
-	if (lpNtSystemDebugControl == NULL) {
-		hNtdll = GetModuleHandleW(L"ntdll.dll");
-		lpNtSystemDebugControl = GetProcAddress(hNtdll, "NtSystemDebugControl");
-		if (lpNtSystemDebugControl != NULL)
-			oNtSystemDebugControl = reinterpret_cast<tNtSystemDebugControl>(DetourFunction(reinterpret_cast<PBYTE>(lpNtSystemDebugControl), reinterpret_cast<PBYTE>(hNtSystemDebugControl)));
-	}
-
-	//NtYieldExecution Bypass
-	if (lpNtYieldExecution == NULL) {
-		hNtdll = GetModuleHandleW(L"ntdll.dll");
-		lpNtYieldExecution = GetProcAddress(hNtdll, "NtYieldExecution");
-		if (lpNtYieldExecution != NULL)
-			oNtYieldExecution = reinterpret_cast<tNtYieldExecution>(DetourFunction(reinterpret_cast<PBYTE>(lpNtYieldExecution), reinterpret_cast<PBYTE>(hNtYieldExecution)));
-	}
-
-	//SetHandleInformation Bypass
-	if (lpSetHandleInformation == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpSetHandleInformation = GetProcAddress(hKernel32, "SetHandleInformation");
-		if (lpSetHandleInformation != NULL)
-			oSetHandleInformation = reinterpret_cast<tSetHandleInformation>(DetourFunction(reinterpret_cast<PBYTE>(lpSetHandleInformation), reinterpret_cast<PBYTE>(hSetHandleInformation)));
-	}
-
-	//SetupDiGetDeviceRegistryPropertyW Bypass
-	if (lpSetupDiGetDeviceRegistryPropertyW == NULL) {
-		hSetupapi = GetModuleHandleW(L"setupapi.dll");
-		lpSetupDiGetDeviceRegistryPropertyW = GetProcAddress(hSetupapi, "SetupDiGetDeviceRegistryPropertyW");
-
-		if (lpSetupDiGetDeviceRegistryPropertyW != NULL)
-			oSetupDiGetDeviceRegistryPropertyW = reinterpret_cast<tSetupDiGetDeviceRegistryPropertyW>(DetourFunction(reinterpret_cast<PBYTE>(lpSetupDiGetDeviceRegistryPropertyW), reinterpret_cast<PBYTE>(hSetupDiGetDeviceRegistryPropertyW)));
-	}
-	
-	//EnumServicesStatusExW Bypass
-	if (lpEnumServicesStatusExW == NULL) {
-		hAdvapi32 = GetModuleHandleW(L"advapi32.dll");
-		lpEnumServicesStatusExW = GetProcAddress(hAdvapi32, "EnumServicesStatusExW");
-
-		if (lpEnumServicesStatusExW != NULL)
-			oEnumServicesStatusExW = reinterpret_cast<tEnumServicesStatusExW>(DetourFunction(reinterpret_cast<PBYTE>(lpEnumServicesStatusExW), reinterpret_cast<PBYTE>(hEnumServicesStatusExW)));
-	}
-
-	//GetDiskFreeSpaceExW Bypass
-	if (lpGetDiskFreeSpaceExW == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetDiskFreeSpaceExW = GetProcAddress(hKernel32, "GetDiskFreeSpaceExW");
-
-		if (lpGetDiskFreeSpaceExW != NULL)
-			oGetDiskFreeSpaceExW = reinterpret_cast<tGetDiskFreeSpaceExW>(DetourFunction(reinterpret_cast<PBYTE>(lpGetDiskFreeSpaceExW), reinterpret_cast<PBYTE>(hGetDiskFreeSpaceExW)));
-	}
-
-	//RegQueryValueExW Bypass
-	if (lpRegQueryValueExW == NULL) {
-		hAdvapi32 = GetModuleHandleW(L"advapi32.dll");
-		lpRegQueryValueExW = GetProcAddress(hAdvapi32, "RegQueryValueExW");
-
-		if (lpRegQueryValueExW != NULL)
-			oRegQueryValueExW = reinterpret_cast<tRegQueryValueExW>(DetourFunction(reinterpret_cast<PBYTE>(lpRegQueryValueExW), reinterpret_cast<PBYTE>(hRegQueryValueExW)));
-	}
-
-	//RegEnumKeyExW Bypass
-	if (lpRegEnumKeyExW == NULL) {
-		hAdvapi32 = GetModuleHandleW(L"advapi32.dll");
-		lpRegEnumKeyExW = GetProcAddress(hAdvapi32, "RegEnumKeyExW");
-
-		if (lpRegEnumKeyExW != NULL)
-			oRegEnumKeyExW = reinterpret_cast<tRegEnumKeyExW>(DetourFunction(reinterpret_cast<PBYTE>(lpRegEnumKeyExW), reinterpret_cast<PBYTE>(hRegEnumKeyExW)));
-	}
-
-		//NtDelayExecution Bypass
-	if (lpNtDelayExecution == NULL) {
-		hNtdll = GetModuleHandleW(L"ntdll.dll");
-		lpNtDelayExecution = GetProcAddress(hNtdll, "NtDelayExecution");
-		if (lpNtDelayExecution != NULL)
-			oNtDelayExecution = reinterpret_cast<tNtDelayExecution>(DetourFunction(reinterpret_cast<PBYTE>(lpNtDelayExecution), reinterpret_cast<PBYTE>(hNtDelayExecution)));
-	}
-
-	//SetTimer Bypass
-	if (lpSetTimer == NULL) {
-		hUser32 = GetModuleHandleW(L"user32.dll");
-		lpSetTimer = GetProcAddress(hUser32, "SetTimer");
-		if (lpSetTimer != NULL)
-			oSetTimer = reinterpret_cast<tSetTimer>(DetourFunction(reinterpret_cast<PBYTE>(lpSetTimer), reinterpret_cast<PBYTE>(hSetTimer)));
-	}
-
-	//TimeSetEvent Bypass
-	if (lpTimeSetEvent == NULL) {
-		hWinmm = GetModuleHandleW(L"winmm.dll");
-		lpTimeSetEvent = GetProcAddress(hWinmm, "timeSetEvent");
-		if (lpTimeSetEvent != NULL)
-			oTimeSetEvent = reinterpret_cast<tTimeSetEvent>(DetourFunction(reinterpret_cast<PBYTE>(lpTimeSetEvent), reinterpret_cast<PBYTE>(hTimeSetEvent)));
-	}
-
-	//WaitForSingleObject Bypass
-	if (lpWaitForSingleObject == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpWaitForSingleObject = GetProcAddress(hKernel32, "WaitForSingleObject");
-		if (lpWaitForSingleObject != NULL)
-			oWaitForSingleObject = reinterpret_cast<tWaitForSingleObject>(DetourFunction(reinterpret_cast<PBYTE>(lpWaitForSingleObject), reinterpret_cast<PBYTE>(hWaitForSingleObject)));
-	}
-
-	//IcmpSendEcho Bypass
-	if (lpIcmpSendEcho == NULL) {
-		hIphlpapi = GetModuleHandleW(L"Iphlpapi.dll");
-		lpIcmpSendEcho = GetProcAddress(hIphlpapi, "IcmpSendEcho");
-		if (lpIcmpSendEcho != NULL)
-			oIcmpSendEcho = reinterpret_cast<tIcmpSendEcho>(DetourFunction(reinterpret_cast<PBYTE>(lpIcmpSendEcho), reinterpret_cast<PBYTE>(hIcmpSendEcho)));
-	}
-
-	//SetWaitableTimer Bypass
-	if (lpSetWaitableTimer == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpSetWaitableTimer = GetProcAddress(hKernel32, "SetWaitableTimer");
-		if (lpSetWaitableTimer != NULL)
-			oSetWaitableTimer = reinterpret_cast<tSetWaitableTimer>(DetourFunction(reinterpret_cast<PBYTE>(lpSetWaitableTimer), reinterpret_cast<PBYTE>(hSetWaitableTimer)));
-	}
-
-	//CreateTimerQueueTimer Bypass
-	if (lpCreateTimerQueueTimer == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpCreateTimerQueueTimer = GetProcAddress(hKernel32, "CreateTimerQueueTimer");
-		if (lpCreateTimerQueueTimer != NULL)
-			oCreateTimerQueueTimer = reinterpret_cast<tCreateTimerQueueTimer>(DetourFunction(reinterpret_cast<PBYTE>(lpCreateTimerQueueTimer), reinterpret_cast<PBYTE>(hCreateTimerQueueTimer)));
-	}
-
-	//CreateToolhelp32Snapshot Bypass
-	if (lpCreateToolhelp32Snapshot == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpCreateToolhelp32Snapshot = GetProcAddress(hKernel32, "CreateToolhelp32Snapshot");
-		if (lpCreateToolhelp32Snapshot != NULL)
-			oCreateToolhelp32Snapshot = reinterpret_cast<tCreateToolhelp32Snapshot>(DetourFunction(reinterpret_cast<PBYTE>(lpCreateToolhelp32Snapshot), reinterpret_cast<PBYTE>(hCreateToolhelp32Snapshot)));
-	}
-	
-	//RegOpenKeyEx Bypass
-	if (lpRegOpenKeyExW == NULL) {
-		hAdvapi32 = GetModuleHandleW(L"advapi32.dll");
-		lpRegOpenKeyExW = GetProcAddress(hAdvapi32, "RegOpenKeyExW");
-		if (lpRegOpenKeyExW != NULL)
-			oRegOpenKeyExW = reinterpret_cast<tRegOpenKeyExW>(DetourFunction(reinterpret_cast<PBYTE>(lpRegOpenKeyExW), reinterpret_cast<PBYTE>(hRegOpenKeyExW)));
-	}
-
-	//GetSystemFirmwareTable Bypass
-	if (lpGetSystemFirmwareTable == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpGetSystemFirmwareTable = GetProcAddress(hKernel32, "GetSystemFirmwareTable");
-		if (lpGetSystemFirmwareTable != NULL)
-			oGetSystemFirmwareTable = reinterpret_cast<tGetSystemFirmwareTable>(DetourFunction(reinterpret_cast<PBYTE>(lpGetSystemFirmwareTable), reinterpret_cast<PBYTE>(hGetSystemFirmwareTable)));
-	}
-
-	//EnumSystemFirmwareTables Bypass
-	if (lpEnumSystemFirmwareTables == NULL) {
-		hKernel32 = GetModuleHandleW(L"kernel32.dll");
-		lpEnumSystemFirmwareTables = GetProcAddress(hKernel32, "EnumSystemFirmwareTables");
-		if (lpEnumSystemFirmwareTables != NULL)
-			oEnumSystemFirmwareTables = reinterpret_cast<tEnumSystemFirmwareTables>(DetourFunction(reinterpret_cast<PBYTE>(lpEnumSystemFirmwareTables), reinterpret_cast<PBYTE>(hEnumSystemFirmwareTables)));
-	}
-
-
-	//ExecQuery Bypass & Get Bypass
-	if (wcscmp(lpDLLName, L"fastprox.dll") == 0)
-	{
-		parse_ruleset("ruleset.txt");
-		if (!lpDLLBase)
-			return;
-
-		HANDLE proc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, findMyProc("target.exe"));
-		SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
-		if (!SymInitialize(proc, NULL, TRUE)) {
-			std::cout << "Error initializing symbols: " << GetLastError() << std::endl;
-			return;
+		if (*hook.hModule == nullptr) {
+			*hook.hModule = GetModuleHandleW(hook.dllName);
+			if (*hook.hModule == nullptr) {
+				DEBUG_LOG(L"Failed to get handle for %s\n", hook.dllName);
+				return false;
+			}
 		}
 
-		SYMBOL_INFO symbolInfo;
+		*hook.lpFunction = GetProcAddress(*hook.hModule, hook.functionName);
+		if (*hook.lpFunction == nullptr) {
+			DEBUG_LOG(L"Failed to get address for %S in %s\n",
+				hook.functionName, hook.dllName);
+			return false;
+		}
+
+		*hook.originalFunction = DetourFunction(
+			reinterpret_cast<PBYTE>(*hook.lpFunction),
+			reinterpret_cast<PBYTE>(hook.hookFunction)
+		);
+
+		DEBUG_LOG(L"Successfully hooked %S in %s\n",
+			hook.functionName, hook.dllName);
+		return true;
+	}
+
+	// WMI hook installation
+	bool InstallWMIQueryHooks(HANDLE proc, DWORD64 baseAddr, PVOID lpDLLBase) {
+		SYMBOL_INFO symbolInfo = { 0 };
 		symbolInfo.SizeOfStruct = sizeof(SYMBOL_INFO);
 		symbolInfo.MaxNameLen = MAX_SYM_NAME;
 
-		DWORD64 dwAddress = 0;
-		if (!SymFromName(proc, "fastprox!CWbemSvcWrapper::XWbemServices::ExecQuery", &symbolInfo)) {
-			std::cout << "Error finding symbol: " << GetLastError() << std::endl;
+		if (!SymFromName(proc, "CWbemSvcWrapper::XWbemServices::ExecQuery", &symbolInfo)) {
+			DEBUG_LOG(L"Failed to find ExecQuery symbol\n");
+#ifdef DEBUG
+			// Troubleshooting steps for symbol loading issues:
+			// 1. Use x32dbg to locate fastprox.dll in exports section
+			// 2. Download symbols through x32dbg (right-click -> download symbols)
+			// 3. Copy PDB from x32dbg symbols folder to project's Bin folder
+			//    Example path: x32dbg_dir/release/x32/symbols/fastprox.pdb/{hash}/fastprox.pdb
+			// 4. Below code will enumerate all ExecQuery-related symbols for verification
+			if (!SymEnumSymbols(proc, baseAddr, "*ExecQuery*",
+				[](PSYMBOL_INFO pSymInfo, ULONG SymbolSize, PVOID UserContext) {
+					std::cout << "Symbol found: " << pSymInfo->Name
+						<< " at address: " << (void*)pSymInfo->Address << std::endl;
+					return TRUE;
+				}, NULL)) {
+				std::cout << "Error enumerating symbols: " << GetLastError() << std::endl;
+			}
+			// 5. Cross-reference addresses with x32dbg exports view
+			// 6. For assistance: vvelitkn@gmail.com or open GitHub issue
+#endif // DEBUG
+			return false;
+		}
+
+		// Install ExecQuery hook
+		LPVOID lpExecQueryFunc = reinterpret_cast<LPVOID>(symbolInfo.Address);
+		oExecQueryFunc = reinterpret_cast<tExecQueryFunc>(DetourFunction(
+			reinterpret_cast<PBYTE>(lpExecQueryFunc),
+			reinterpret_cast<PBYTE>(hExecQueryFunc)));
+
+		// Install Get hook
+		LPVOID lpGetFunc = GetProcAddress(reinterpret_cast<HMODULE>(lpDLLBase),
+			"?Get@CWbemObject@@UAGJPBGJPAUtagVARIANT@@PAJ2@Z");
+
+		if (lpGetFunc == nullptr) {
+			DEBUG_LOG(L"Failed to get Get function address\n");
+			return false;
+		}
+
+		oGetFunc = reinterpret_cast<tGetFunc>(DetourFunction(
+			reinterpret_cast<PBYTE>(lpGetFunc),
+			reinterpret_cast<PBYTE>(hGetFunc)));
+
+		return true;
+	}
+
+	// WMI hooks setup
+	bool InstallWMIHooks(PWSTR lpDLLName, PVOID lpDLLBase) {
+		DWORD procID = findMyProc("target.exe");
+		HANDLE proc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, procID);
+		if (!proc) {
+			DEBUG_LOG(L"Failed to open target process\n");
+			return false;
+		}
+
+		// Configure and initialize symbol handler
+		SymSetOptions(SYMOPT_DEBUG | SYMOPT_LOAD_LINES | SYMOPT_DEFERRED_LOADS |
+			SYMOPT_UNDNAME | SYMOPT_LOAD_ANYTHING);
+
+		if (!SymInitialize(proc, NULL, TRUE)) {
+			DEBUG_LOG(L"Symbol initialization failed\n");
+			CloseHandle(proc);
+			return false;
+		}
+
+		// Load module symbols
+		DWORD64 baseAddr = SymLoadModuleEx(proc, NULL, "fastprox.dll", NULL,
+			(DWORD64)lpDLLBase, 0, NULL, 0);
+		if (baseAddr == 0) {
+			DEBUG_LOG(L"Failed to load module symbols\n");
+			SymCleanup(proc);
+			CloseHandle(proc);
+			return false;
+		}
+
+		bool success = InstallWMIQueryHooks(proc, baseAddr, lpDLLBase);
+
+		SymCleanup(proc);
+		CloseHandle(proc);
+		return success;
+	}
+}
+
+// Main callback function
+VOID NTAPI DllLoadCallback(PWSTR lpDLLName, PVOID lpDLLBase, SIZE_T size, PVOID lpReserved) {
+	// Initialize ruleset once
+	static bool rulesInitialized = false;
+	if (!rulesInitialized) {
+		if (!parse_ruleset("ruleset.txt")) {
+			DEBUG_LOG(L"Failed to parse ruleset.txt\n");
 			return;
 		}
-		LPVOID lpGetFunc = GetProcAddress(reinterpret_cast<HMODULE>(lpDLLBase), "?Get@CWbemObject@@UAGJPBGJPAUtagVARIANT@@PAJ2@Z");
-		oGetFunc = reinterpret_cast<tGetFunc>(DetourFunction(reinterpret_cast<PBYTE>(lpGetFunc), reinterpret_cast<PBYTE>(hGetFunc)));
+		rulesInitialized = true;
+	}
 
-		LPVOID lpExecQueryFunc = reinterpret_cast<unsigned char*>(symbolInfo.Address);
-		oExecQueryFunc = reinterpret_cast<tExecQueryFunc>(DetourFunction(reinterpret_cast<PBYTE>(lpExecQueryFunc), reinterpret_cast<PBYTE>(hExecQueryFunc)));
+	DEBUG_LOG(L"Processing DLL: %s\n", lpDLLName);
+
+	// Define all hooks
+	const HookInfo hooks[] = {
+		// Kernel32 hooks
+		{L"kernel32.dll", "GetModuleHandleW", &hKernel32, &lpGetModuleHandleW,
+		 (LPVOID)hGetModuleHandleW, (LPVOID*)&oGetModuleHandleW},
+		{L"kernel32.dll", "GetComputerNameW", &hKernel32, &lpGetComputerNameW,
+		 (LPVOID)hGetComputerNameW, (LPVOID*)&oGetComputerNameW},
+		{L"kernel32.dll", "GetComputerNameA", &hKernel32, &lpGetComputerNameA,
+		 (LPVOID)hGetComputerNameA, (LPVOID*)&oGetComputerNameA},
+		{L"kernel32.dll", "GetFileAttributesW", &hKernel32, &lpGetFileAttributesW,
+		 (LPVOID)hGetFileAttributesW, (LPVOID*)&oGetFileAttributesW},
+		{L"kernel32.dll", "PathFindFileNameW", &hKernel32, &lpPathFindFileNameW,
+		 (LPVOID)hPathFindFileNameW, (LPVOID*)&oPathFindFileNameW},
+		{L"kernel32.dll", "WaitForSingleObject", &hKernel32, &lpWaitForSingleObject,
+		 (LPVOID)hWaitForSingleObject, (LPVOID*)&oWaitForSingleObject},
+		{L"kernel32.dll", "SetWaitableTimer", &hKernel32, &lpSetWaitableTimer,
+		 (LPVOID)hSetWaitableTimer, (LPVOID*)&oSetWaitableTimer},
+		{L"kernel32.dll", "CreateTimerQueueTimer", &hKernel32, &lpCreateTimerQueueTimer,
+		 (LPVOID)hCreateTimerQueueTimer, (LPVOID*)&oCreateTimerQueueTimer},
+		{L"kernel32.dll", "CreateToolhelp32Snapshot", &hKernel32, &lpCreateToolhelp32Snapshot,
+		 (LPVOID)hCreateToolhelp32Snapshot, (LPVOID*)&oCreateToolhelp32Snapshot},
+		{L"kernel32.dll", "CreateFileW", &hKernel32, &lpCreateFile,
+		 (LPVOID)hCreateFile, (LPVOID*)&oCreateFile },
+		{L"kernel32.dll", "GetSystemFirmwareTable", &hKernel32, &lpGetSystemFirmwareTable,
+		 (LPVOID)hGetSystemFirmwareTable, (LPVOID*)&oGetSystemFirmwareTable },
+
+		// Advapi32 hooks
+		{L"advapi32.dll", "GetUserNameW", &hAdvapi32, &lpGetUserNameW,
+		 (LPVOID)hGetUserNameW, (LPVOID*)&oGetUserNameW},
+		{L"advapi32.dll", "EnumServicesStatusExW", &hAdvapi32, &lpEnumServicesStatusExW,
+		 (LPVOID)hEnumServicesStatusExW, (LPVOID*)&oEnumServicesStatusExW},
+		{L"advapi32.dll", "RegQueryValueExW", &hAdvapi32, &lpRegQueryValueExW,
+		 (LPVOID)hRegQueryValueExW, (LPVOID*)&oRegQueryValueExW},
+		{L"advapi32.dll", "RegEnumKeyExW", &hAdvapi32, &lpRegEnumKeyExW,
+		 (LPVOID)hRegEnumKeyExW, (LPVOID*)&oRegEnumKeyExW},
+		{L"advapi32.dll", "RegOpenKeyExW", &hAdvapi32, &lpRegOpenKeyExW,
+		 (LPVOID)hRegOpenKeyExW, (LPVOID*)&oRegOpenKeyExW},
+
+		// Ntdll hooks
+		{L"ntdll.dll", "NtSystemDebugControl", &hNtdll, &lpNtSystemDebugControl,
+		 (LPVOID)hNtSystemDebugControl, (LPVOID*)&oNtSystemDebugControl},
+		{L"ntdll.dll", "NtYieldExecution", &hNtdll, &lpNtYieldExecution,
+		 (LPVOID)hNtYieldExecution, (LPVOID*)&oNtYieldExecution},
+		{L"ntdll.dll", "NtDelayExecution", &hNtdll, &lpNtDelayExecution,
+		 (LPVOID)hNtDelayExecution, (LPVOID*)&oNtDelayExecution},
+		
+		// Iphlpapi hooks
+		{L"Iphlpapi.dll", "IcmpSendEcho", &hIphlpapi, &lpIcmpSendEcho,
+		 (LPVOID)hIcmpSendEcho, (LPVOID*)&oIcmpSendEcho},
+		 {L"Iphlpapi.dll", "GetAdaptersInfo", &hIphlpapi, &lpGetAdaptersInfo,
+		 (LPVOID)hGetAdaptersInfo, (LPVOID*)&oGetAdaptersInfo},
+
+		// User32 hooks
+		{L"user32.dll", "SetTimer", &hUser32, &lpSetTimer,
+		 (LPVOID)hSetTimer, (LPVOID*)&oSetTimer},
+
+		// Winmm hooks
+		{L"winmm.dll", "timeSetEvent", &hWinmm, &lpTimeSetEvent,
+		 (LPVOID)hTimeSetEvent, (LPVOID*)&oTimeSetEvent},
+
+		// Setupapi hooks
+		{L"setupapi.dll", "SetupDiGetDeviceRegistryPropertyW", &hSetupapi, &lpSetupDiGetDeviceRegistryPropertyW,
+		 (LPVOID)hSetupDiGetDeviceRegistryPropertyW, (LPVOID*)&oSetupDiGetDeviceRegistryPropertyW},
+	};
+
+
+	// Install standard hooks
+	for (const auto& hook : hooks) {
+		InstallHook(hook);
+	}
+
+	// Handle WMI hooks separately
+	if (wcscmp(lpDLLName, L"fastprox.dll") == 0) {
+		if (!InstallWMIHooks(lpDLLName, lpDLLBase)) {
+			DEBUG_LOG(L"WMI hook installation failed\n");
+		}
 	}
 }
 
